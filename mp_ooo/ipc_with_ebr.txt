@@ -1,0 +1,2 @@
+fft: 0.537155
+compression: 0.72

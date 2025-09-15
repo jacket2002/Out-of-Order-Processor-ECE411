@@ -6,8 +6,8 @@ fi
 
 # Run make command with the specified ELF argument
 # make spike ELF=./bin/$1
-# make spike ELF=../testcode/cp3_release_benches/$1
-make spike ELF=../testcode/$1
+make spike ELF=../testcode/cp3_release_benches/$1
+# make spike ELF=../testcode/$1
 # make spike ELF=../testcode/additional_testcases/$1
 retval=$?
 

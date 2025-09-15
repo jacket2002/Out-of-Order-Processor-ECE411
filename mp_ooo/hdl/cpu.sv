@@ -1,4 +1,5 @@
 module cpu
+import params::*;
 import rv32i_types::*;
 (
     input   logic               clk,
@@ -20,7 +21,7 @@ import rv32i_types::*;
 
 
 logic [31:0] imem_addr, imem_rdata, dmem_addr, dmem_rdata, dmem_wdata, dmem_dfp_addr, imem_dfp_addr;
-logic imem_resp, dmem_resp;
+logic imem_resp, dmem_resp, dfp_resp_write;
 
 logic [3:0] imem_rmask, dmem_wmask, dmem_rmask;
 
@@ -30,8 +31,8 @@ logic [255:0]  dmem_dfp_rdata, dmem_dfp_wdata,  imem_dfp_rdata;
 logic dmem_dfp_read, dmem_dfp_write, imem_dfp_read, dmem_dfp_resp, imem_dfp_resp;
 logic [1:0] adapter_write_count;
 
-logic dfp_read, dfp_write, dfp_resp;
-logic [31:0] dfp_addr, dfp_raddr;
+logic dfp_read, dfp_write, dfp_resp, icache_serviced;
+logic [31:0] dfp_addr, dfp_raddr, imem_dfp_raddr, dmem_dfp_raddr;
 logic [255:0] dfp_wdata, dfp_rdata;
 
 
@@ -122,6 +123,19 @@ logic [255:0] dfp_wdata, dfp_rdata;
     input logic [31:0] imem_rdata, dmem_rdata,
     input logic imem_resp, dmem_resp
 */
+logic [STORE_QUEUE_PTR_WIDTH-1:0] dcache_store_idx;
+logic [LOAD_RS_INDEX_BITS-1:0] dcache_load_idx, index_resp, index_write;
+logic ready, dmem_resp_type, dcache_serviced;
+
+always_comb begin
+     dcache_load_idx = index_resp;
+     dcache_store_idx = index_resp[STORE_QUEUE_PTR_WIDTH-1:0];
+
+end
+
+
+
+
 
 ERR_CORE ball_core (
 
@@ -139,12 +153,19 @@ ERR_CORE ball_core (
      .dmem_wmask(dmem_wmask),
      .dmem_rdata(dmem_rdata),
      .dmem_wdata(dmem_wdata),
-     .dmem_resp(dmem_resp)
+     .dmem_resp(dmem_resp),
+     .dmem_ready(ready),
+     .dcache_load_idx(dcache_load_idx),
+     .dcache_store_idx(dcache_store_idx),
+     .index_write(index_write),
+     .dmem_resp_type(dmem_resp_type)
+
+
     
 );
 
 
-ppl_cache D_CACHE(
+non_blocking_cache D_CACHE(
 
      .clk (clk),
      .rst (rst),
@@ -160,13 +181,20 @@ ppl_cache D_CACHE(
      .dfp_write (dmem_dfp_write),
      .dfp_rdata (dmem_dfp_rdata),
      .dfp_wdata (dmem_dfp_wdata),
-     .dfp_resp (dmem_dfp_resp)
+     .dfp_resp (dmem_dfp_resp),
+     .dcache_serviced(dcache_serviced),
+     .dfp_raddr(dmem_dfp_raddr), 
+     .dfp_resp_write(dfp_resp_write),
+     .index_resp(index_resp),
+     .index_write(index_write),
+     .dmem_resp_type(dmem_resp_type),
+     .ready(ready)
 );
+
 
 
 cache_read I_CACHE(
 
-     
      .clk (clk),
      .rst(rst),
      .ufp_addr(imem_addr),
@@ -181,14 +209,17 @@ cache_read I_CACHE(
      .dfp_write (),
      .dfp_rdata (imem_dfp_rdata),
      .dfp_wdata (),
-     .dfp_resp (imem_dfp_resp)
+     .dfp_resp (imem_dfp_resp),
+     .icache_serviced(icache_serviced)
 );
 
 cache_arbiter cache_arbiter_0 (
      .clk(clk),
      .rst(rst),
      .imem_dfp_raddr(),
-     .dmem_dfp_raddr(),
+     .dmem_dfp_raddr(dmem_dfp_raddr),
+     .imem_dfp_read_after(icache_serviced),
+     .dfp_resp_write(dfp_resp_write),
      .*
 );
 

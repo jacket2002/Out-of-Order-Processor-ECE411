@@ -131,7 +131,6 @@ always_ff @(posedge clk) begin
     if (cdb_entry_add.valid) begin mem[cdb_entry_add.rob_idx[ROB_PTR_WIDTH-1:0]].ready_to_commit <= '1; end
     if (cdb_entry_mem.valid) begin mem[cdb_entry_mem.rob_idx[ROB_PTR_WIDTH-1:0]].ready_to_commit <= '1; end
     if (ROB_store_commit_flag) begin mem[read_ptr[ROB_PTR_WIDTH-1:0]].ready_to_commit <= '1; end
-
 end
 
 // always_comb begin

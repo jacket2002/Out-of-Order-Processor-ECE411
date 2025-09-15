@@ -11,6 +11,6 @@
         "gate_clock"    : true,
         "retime"        : true,
         "min_power"     : false,
-        "inc_iter"      : 2
+        "inc_iter"      : 0
     }
 }

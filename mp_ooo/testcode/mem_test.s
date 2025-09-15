@@ -9,21 +9,6 @@ _start:
 
     auipc x4, 0 # br_fu, write 1eceb00c. 
     lui x5, 0x2eceb # alu_fu
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    sw x0, 0(x5)
-    lw x6, 0(x5)
-    sw x0, 0(x5)
-    lw x6, 0(x5)
-    sw x0, 0(x5)
-    lw x6, 0(x5)
-    sw x0, 0(x5)
-    lw x6, 0(x5)
-
+    sw x4, 0(x5)
+    lw x4, 0(x5)
     slti x0, x0, -256

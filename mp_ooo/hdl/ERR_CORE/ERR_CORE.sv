@@ -11,7 +11,14 @@ import rv32i_types::*;
     output logic [3:0] imem_rmask, dmem_rmask, dmem_wmask,
 
     input logic [31:0] imem_rdata, dmem_rdata,
-    input logic imem_resp, dmem_resp
+    input logic imem_resp, dmem_resp,
+
+    input logic dmem_ready,
+    input logic [LOAD_RS_INDEX_BITS-1:0] dcache_load_idx,
+    input logic [STORE_QUEUE_PTR_WIDTH-1:0] dcache_store_idx,
+    output logic [LOAD_RS_INDEX_BITS-1:0] index_write,
+    input logic dmem_resp_type
+
 );
 logic [31:0] instruction;
 logic read_ack;
@@ -38,6 +45,12 @@ logic [31:0] pc_target_predict_out;
 logic [PHYSICAL_REG_FILE_LENGTH-1:0] renamed_dest_reg;
 logic queue_full_free_list, queue_empty_free_list; // these 4 signals probably not needed.
 logic read_ack_free_list, write_ack_free_list;
+
+logic [LOAD_RS_INDEX_BITS-1:0] load_req_RS_idx;
+logic [STORE_QUEUE_PTR_WIDTH-1:0] store_req_entry_idx;
+
+
+
 
 
 // decode signal
@@ -139,6 +152,7 @@ logic   [31:0]  rs1_v_alu, rs2_v_alu, rs1_v_mul, rs2_v_mul, rs1_v_br, rs2_v_br, 
 // logic [4:0] CDB_logical_d_reg;
 // logic [PHYSICAL_REG_FILE_LENGTH-1:0] CDB_phys_d_reg;
 logic mem_queue_empty;
+logic ROB_store_commit_flag;
 
 // RVFI signals
 logic [4:0] rvfi_rs1_s, rvfi_rs2_s, rvfi_rd_s;
@@ -666,6 +680,7 @@ CDB_mem CDB_mem_inst (
     .addr_rs_entry(addr_rs_entry), 
 
     .ROB_read_ptr(ROB_read_ptr),
+    .ROB_store_commit_flag(ROB_store_commit_flag),
 
     .rs1_mem(rs1_mem), //outputs into Phys Reg File (we don't need rs2 for loads)
     .rs2_mem(rs2_mem),
@@ -701,9 +716,29 @@ CDB_mem CDB_mem_inst (
     .dmem_wmask(dmem_wmask), 
     .dmem_rmask(dmem_rmask),
 
+    // nb stuff 
+    .dmem_ready(dmem_ready),
+    .dmem_resp_type(dmem_resp_type),
+    .dcache_load_idx(dcache_load_idx),
+    .dcache_store_idx(dcache_store_idx),
+    .load_req_RS_idx(load_req_RS_idx),
+    .store_req_entry_idx(store_req_entry_idx),
+
     // rvfi 
     .*
 );
+
+always_comb begin
+    index_write = '0;
+    if(|dmem_rmask) begin
+        index_write = load_req_RS_idx;
+    end
+    else if (|dmem_wmask) begin
+        index_write = {'0, store_req_entry_idx};
+    end
+
+
+end
 
 RVFI #(
     .QUEUE_SIZE(ROB_DEPTH)

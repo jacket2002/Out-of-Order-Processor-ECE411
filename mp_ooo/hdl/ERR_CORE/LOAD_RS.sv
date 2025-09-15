@@ -25,7 +25,23 @@ import params::*;
     input logic [3:0] rmask_in,
     input logic [31:0] rs1_v,
     input load_f3_t load_type,
-    input logic garbage_dmem,
+
+    // non-block cache
+    input logic [LOAD_RS_INDEX_BITS-1:0] dcache_load_idx,
+    input logic dmem_resp,
+    input logic dmem_resp_type,
+
+    output logic [ROB_PTR_WIDTH:0] load_finished_rob_idx,
+    output logic [4:0] load_finished_arch_d_reg,
+    output logic [PHYSICAL_REG_FILE_LENGTH-1:0] load_finished_phys_d_reg,
+    output logic [CONTROL_Q_DEPTH-1:0] load_finished_control_bit_map,
+    output logic [1:0] load_finished_addr_bottom_bits,
+    output logic load_finished_garbage_dmem,
+    output load_f3_t load_finished_load_type,
+    output logic [31:0] load_finished_rs1_v,
+    output logic [31:0] load_finished_addr,
+    output logic [3:0] load_finished_rmask,
+
 
     output logic [31:0] req_addr,
     output logic [3:0] req_rmask,
@@ -40,7 +56,8 @@ import params::*;
 
     input  store_queue_entry_t store_queue [STORE_QUEUE_DEPTH],
 
-    output load_rs_entry_t load_rs_out [LOAD_RS_NUM]
+    output load_rs_entry_t load_rs_out [LOAD_RS_NUM],
+    output logic [LOAD_RS_INDEX_BITS-1:0] serve_load_idx
 );
 
     load_rs_entry_t reservation_stations [LOAD_RS_NUM];
@@ -64,13 +81,20 @@ import params::*;
                 reservation_stations[i].store_bitmap <= '0;
                 reservation_stations[i].valid_addr <= '0;
                 reservation_stations[i].load_type <= load_f3_lb;
+                reservation_stations[i].req_sent <= '0;
+                reservation_stations[i].garbage_dmem <= '0;
+                reservation_stations[i].control_bit_map <= '0;
             end 
         end
         else begin
             if (flush_by_branch) begin
                 for (int i = 0; i < LOAD_RS_NUM; i++) begin
                     if (reservation_stations[i].control_bit_map[control_read_ptr[CONTROL_Q_PTR_WIDTH-1 : 0]] == 1'b1) begin
-                        reservation_stations[i].finished <= 1'b1;
+                        // reservation_stations[i].finished <= 1'b1;
+                        if (!reservation_stations[i].req_sent) begin
+                            reservation_stations[i].finished <= 1'b1;
+                        end
+                        reservation_stations[i].garbage_dmem <= 1'b1;
                     end
                 end
             end
@@ -97,8 +121,17 @@ import params::*;
                 end
             end
 
-            if (begin_load_req && !garbage_dmem) begin // done as soon as a load is ready, it's the job of CDB_LS to hold onto the resp. 
-                reservation_stations[req_idx].finished <= 1'b1; // finish next cycle after receiving rs1 since address is now known. 
+            // if (begin_load_req && !garbage_dmem) begin // done as soon as a load is ready, it's the job of CDB_LS to hold onto the resp. 
+            // if (begin_load_req) begin
+            
+            if (begin_load_req) begin
+                reservation_stations[req_idx].req_sent <= '1;
+            end
+
+            if (dmem_resp) begin
+                if (!dmem_resp_type) begin
+                    reservation_stations[dcache_load_idx].finished <= 1'b1; // finish next cycle after receiving rs1 since address is now known. 
+                end
             end
 
             // check if older stores who have address ready have either finished or they don't have dependent address. 
@@ -130,7 +163,7 @@ import params::*;
         else begin
             if (!SQ_read_ack) begin
                 for (int unsigned i = 0; i < LOAD_RS_NUM; i++) begin
-                    if (reservation_stations[i].valid_addr && reservation_stations[i].store_bitmap == '0 && !dmem_stall && !reservation_stations[i].finished) begin
+                    if (reservation_stations[i].valid_addr && reservation_stations[i].store_bitmap == '0 && !dmem_stall && !reservation_stations[i].req_sent && !reservation_stations[i].garbage_dmem) begin
                         begin_load_req = '1;
                         req_idx = LOAD_RS_INDEX_BITS'(i);
                     end
@@ -150,6 +183,7 @@ import params::*;
         req_load_type = load_f3_lb;
         req_rs1_v = '0;
         req_control_bit_map = '0;
+        serve_load_idx = '0;
         if (begin_load_req && !SQ_read_ack) begin
             req_addr = reservation_stations[req_idx].addr;
             req_rmask = reservation_stations[req_idx].rmask;
@@ -159,9 +193,11 @@ import params::*;
             req_load_type = reservation_stations[req_idx].load_type;
             req_rs1_v = reservation_stations[req_idx].rs1_v;
             req_control_bit_map = reservation_stations[req_idx].control_bit_map;
+            serve_load_idx = req_idx;
         end
     end
-    assign serve_load_req = begin_load_req && !garbage_dmem;
+    // assign serve_load_req = begin_load_req && !garbage_dmem;
+    assign serve_load_req = begin_load_req;
 
     
     // dispatch_load_idx logic
@@ -178,5 +214,18 @@ import params::*;
     end
 
     assign rs_load_full = rs_full;
+
+    always_comb begin
+        load_finished_arch_d_reg = reservation_stations[dcache_load_idx].arch_d_reg;
+        load_finished_phys_d_reg = reservation_stations[dcache_load_idx].phys_d_reg;
+        load_finished_rob_idx = reservation_stations[dcache_load_idx].rob_idx;
+        load_finished_control_bit_map = reservation_stations[dcache_load_idx].control_bit_map;
+        load_finished_addr_bottom_bits = reservation_stations[dcache_load_idx].addr[1:0];
+        load_finished_garbage_dmem = reservation_stations[dcache_load_idx].garbage_dmem;
+        load_finished_load_type = reservation_stations[dcache_load_idx].load_type;
+        load_finished_addr = reservation_stations[dcache_load_idx].addr;
+        load_finished_rs1_v = reservation_stations[dcache_load_idx].rs1_v;
+        load_finished_rmask = reservation_stations[dcache_load_idx].rmask;
+    end
     
 endmodule : LOAD_RS

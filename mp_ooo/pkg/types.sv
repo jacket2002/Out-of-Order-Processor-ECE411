@@ -1,7 +1,7 @@
 package params;
    // localparam PHYSICAL_REG_FILE_DEPTH = 128;
    localparam PHYSICAL_REG_FILE_LENGTH = 6; // will be the exponent
-   localparam INSTRUCTION_QUEUE_DEPTH = 4;
+   localparam INSTRUCTION_QUEUE_DEPTH = 8;
    localparam ROB_DEPTH = 16;
    localparam ROB_PTR_WIDTH = $clog2(ROB_DEPTH);
    localparam ROB_ENTRY_WIDTH = 1 + PHYSICAL_REG_FILE_LENGTH + 5;
@@ -20,11 +20,11 @@ package params;
    localparam FREE_LIST_QUEUE_LENGTH = PHYSICAL_REG_NUM - 32;
 
    // separate load store queue paramters 
-   localparam ADDR_RS_NUM = 7;
+   localparam ADDR_RS_NUM = 13;
    localparam ADDR_RS_INDEX_BITS = $clog2(ADDR_RS_NUM);
-   localparam LOAD_RS_NUM = 3;
+   localparam LOAD_RS_NUM = 5;
    localparam LOAD_RS_INDEX_BITS = $clog2(LOAD_RS_NUM);
-   localparam STORE_QUEUE_DEPTH = 4;
+   localparam STORE_QUEUE_DEPTH = 8;
    localparam STORE_QUEUE_PTR_WIDTH = $clog2(STORE_QUEUE_DEPTH);
    localparam MEM_QUEUE_PTR_WIDTH = STORE_QUEUE_PTR_WIDTH;
    localparam FORWARD_MAP_SIZE = 4;
@@ -82,6 +82,14 @@ package rv32i_types;
       m_rem          = 3'b110,
       m_remu         = 3'b111
    } m_extension_f3_t;
+    typedef enum logic [2:0] {
+        idle_n = 3'b000,
+        allocate   = 3'b101,
+        idle_d_a_n = 3'b111
+   
+   } non_state_types;
+
+
 
    typedef enum logic [2:0] {
       alu_fu         = 3'b000,
@@ -146,6 +154,29 @@ package rv32i_types;
       logic [31:0] rvfi_inst, rvfi_pc_val;
       logic [3:0] rvfi_mem_rmask, rvfi_mem_wmask;
    } id_dis_stage_reg_t;
+
+   typedef struct packed {
+
+         logic [31:0] bmem_addr;
+         logic [255:0]  write_data;
+         logic [255:0] dmem_rdata;
+         logic [3:0] read_mask;
+         logic [31:0] write_mask;
+         logic [31:0] dmem_raddr;
+         logic [22:0] tag;
+         logic [3:0]  set;
+         logic [1:0] index_replace; // make sure to change how we decide this instead of having it be straight up where 
+         logic dirty;
+         logic [2:0] offset;
+         logic valid;
+         logic [LOAD_RS_INDEX_BITS-1:0] index;
+         logic [22:0] dirty_tag;
+         logic is_dirty;
+         logic [255:0] dirty_data;
+         logic read;
+
+    } inst_mem_t;
+
 
    typedef struct packed {
       logic finished;
@@ -258,6 +289,8 @@ package rv32i_types;
       logic valid_addr;
       load_f3_t load_type;
       logic [31:0] rs1_v; 
+      logic req_sent; 
+      logic garbage_dmem; // flag so that the resp from cache is bad since it's a speculative mem inst. 
    } load_rs_entry_t;
 
    typedef struct packed {
@@ -271,6 +304,16 @@ package rv32i_types;
       store_f3_t store_type;
       logic [31:0] rs1_v;
    } store_queue_entry_t; 
+
+   typedef struct packed {
+      logic [31:0] rvfi_rs1_rdata;
+      logic [31:0] rvfi_rs2_rdata;
+      logic [ROB_PTR_WIDTH:0] rvfi_issue_execute_rob_ptr;
+      logic [3:0] rvfi_mem_wmask;
+      logic [3:0] rvfi_mem_rmask;
+      logic [31:0] rvfi_mem_addr;
+      logic [31:0] rvfi_mem_wdata; 
+   } RVFI_mem_entry_t;
 
    // -----------SEPARATE LOAD STORE QUEUE ---------------------------------
 
@@ -294,7 +337,6 @@ package rv32i_types;
       logic [CONTROL_Q_DEPTH-1:0] control_bit_map;
 
    } cdb_entry_t;
-
    typedef struct packed {
 
 
@@ -310,8 +352,10 @@ package rv32i_types;
       logic [3:0] small_w;
 
       logic [31:0] wd_small;
+      logic [LOAD_RS_INDEX_BITS-1:0] index;
 
    } dec_exec;
+
 
 
 

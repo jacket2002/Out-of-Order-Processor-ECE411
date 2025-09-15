@@ -25,27 +25,28 @@ import rv32i_types::*;
 
     // output  logic   [1:0]   adapter_write_count,
     // output  logic           dfp_ready,
-    output  logic           dfp_resp
+    output  logic           dfp_resp,
+    output  logic           dfp_resp_write
 );
 
     logic [1:0] rvalid_count, write_count;
     logic [191:0] rdata_buffer;
-    logic read_0;
+    // logic read_0;
 
-    logic send_read_request_on_ready;
+    // logic send_read_request_on_ready;
 
-    always_ff @(posedge clk) begin
-        if (rst) send_read_request_on_ready <= '0;
-        else begin
-            if (read_0 && ready) send_read_request_on_ready <= '1;
-            // next cycle after resp, able to get next read request
-            else if (rvalid_count == 2'b11) send_read_request_on_ready <= '0;
-        end
-    end
+    // always_ff @(posedge clk) begin
+    //     if (rst) send_read_request_on_ready <= '0;
+    //     else begin
+    //         if (read_0 && ready) send_read_request_on_ready <= '1;
+    //         // next cycle after resp, able to get next read request
+    //         else if (rvalid_count == 2'b11) send_read_request_on_ready <= '0;
+    //     end
+    // end
 
-    assign read_0 = send_read_request_on_ready? '0: dfp_read;
-    assign addr = send_read_request_on_ready? 'x: dfp_addr;
-    assign read = read_0;
+    // assign read_0 = send_read_request_on_ready? '0: dfp_read;
+    assign addr = dfp_addr;
+    assign read = dfp_read;
     // These part can be done in cache module with logic 'ready' from burst mem
 
     // always_ff @(posedge clk) begin
@@ -80,23 +81,24 @@ import rv32i_types::*;
     end
 
     always_comb begin
+        
         if (rvalid_count == 2'b11) begin
             dfp_resp = '1;
             dfp_rdata = {rdata,rdata_buffer[191:0]};
             dfp_raddr = raddr;
-        end
-        // when giving request before getting response, the logic here will be incorrect
-        // Possibly write happens at the same time as rvalid?
-        else if (write_count == 2'b11 && ready) begin
-            dfp_resp = '1;
-            dfp_rdata = 'x;
-            dfp_raddr = 'x;
         end
         else begin
             dfp_resp = '0;
             dfp_rdata = 'x;
             dfp_raddr = 'x;
         end
+        // when giving request before getting response, the logic here will be incorrect
+        // Possibly write happens at the same time as rvalid?
+        dfp_resp_write = '0;
+        if (write_count == 2'b11 && ready) begin
+            dfp_resp_write = '1;
+        end
+        
     end
 
     // Cache hold write request for four ready cycle, read request for one ready cycle

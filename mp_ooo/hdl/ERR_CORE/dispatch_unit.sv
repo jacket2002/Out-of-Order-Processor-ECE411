@@ -274,6 +274,8 @@ import params::*;
         load_rs_entry.load_type = load_f3_lb;
         load_rs_entry.rs1_v = '0;
         load_rs_entry.control_bit_map = control_bit_map;
+        load_rs_entry.req_sent = '0;
+        load_rs_entry.garbage_dmem = '0;
 
         store_queue_entry.wmask = '0;
         store_queue_entry.phys_r2 = phys_r2;

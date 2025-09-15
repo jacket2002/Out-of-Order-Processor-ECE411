@@ -45,6 +45,14 @@ import params::*;
     // outputs into D Cache
     output logic [31:0] dmem_addr, dmem_wdata,
     output logic [3:0] dmem_wmask, dmem_rmask,
+
+    // non-blocking cache signals
+    input logic dmem_ready,
+    input logic dmem_resp_type, // 0 for load, 1 for store
+    input logic [LOAD_RS_INDEX_BITS-1:0] dcache_load_idx,
+    input logic [STORE_QUEUE_PTR_WIDTH-1:0] dcache_store_idx,
+    output logic [LOAD_RS_INDEX_BITS-1:0] load_req_RS_idx,
+    output logic [STORE_QUEUE_PTR_WIDTH-1:0] store_req_entry_idx,
     
     // rvfi signals
     output logic [31:0] rvfi_rs1_rdata_mem, rvfi_rs2_rdata_mem,
@@ -74,10 +82,12 @@ import params::*;
     logic [31:0] rs1_v; 
     load_f3_t load_type;
     store_f3_t store_type;
+    logic [ROB_PTR_WIDTH:0] store_finished_rob_idx;
 
     // LOAD_RS signals
     logic rs_load_full;
     logic [LOAD_RS_INDEX_BITS-1:0] dispatch_load_idx_wire;
+    logic [CONTROL_Q_DEPTH-1:0] store_finished_control_bit_map;
 
     logic [31:0] req_addr;
     logic [3:0] req_rmask;
@@ -88,6 +98,24 @@ import params::*;
     logic [31:0] req_rs1_v;
     logic [CONTROL_Q_DEPTH-1:0] req_control_bit_map;
     logic serve_load_req;
+    logic [LOAD_RS_INDEX_BITS-1:0] serve_load_idx;
+
+    logic [ROB_PTR_WIDTH:0] load_finished_rob_idx;
+    logic [4:0] load_finished_arch_d_reg;
+    logic [PHYSICAL_REG_FILE_LENGTH-1:0] load_finished_phys_d_reg;
+    logic [CONTROL_Q_DEPTH-1:0] load_finished_control_bit_map;
+    logic [1:0] load_finished_addr_bottom_bits;
+    logic load_finished_garbage_dmem; 
+    load_f3_t load_finished_load_type;
+
+    // rvfi specific:
+    logic [31:0] load_finished_rs1_v;
+    logic [31:0] load_finished_addr;
+    logic [3:0] load_finished_rmask;
+
+    logic [ROB_PTR_WIDTH:0] CDB_load_rob_idx;
+    logic [4:0] CDB_arch_d_reg;
+    logic [PHYSICAL_REG_FILE_LENGTH-1:0] CDB_phys_d_reg;
 
     // Store Queue signals
     logic SQ_full, SQ_empty;
@@ -111,13 +139,11 @@ import params::*;
     logic store_ready; 
 
     logic [CONTROL_Q_DEPTH-1:0] control_bit_map_reg, CDB_control_bit_map_reg; 
-    logic flush_fu_by_branch;
+    // logic flush_fu_by_branch;
 
-    logic [3:0] mem_rmask_reg, mem_rmask;
-    logic [3:0] mem_wmask_reg, mem_wmask; 
+    logic [3:0] mem_rmask;
+    logic [3:0] mem_wmask; 
     logic [ROB_PTR_WIDTH:0] CDB_rob_reg;
-    load_f3_t load_f3_reg; 
-    logic [1:0] addr_bottom_bits; // needed for load to shift data correctly. 
     logic dmem_resp_reg; // valid
     logic [31:0] dmem_rdata_reg; // rd_v (after shifting and calculation)
     // logic [31:0] actual_dmem_rdata_reg; // raw data you read from memory, passed into RVFI. 
@@ -131,18 +157,22 @@ import params::*;
     logic [31:0] mem_addr_reg, mem_rdata_reg, mem_wdata_reg;
 
     logic dmem_stall;
-    assign dmem_stall = (!dmem_resp && !(mem_wmask_reg == '0 && mem_rmask_reg == '0)) ? 1'b1 : 1'b0;
+    // assign dmem_stall = (!dmem_resp && !(mem_wmask_reg == '0 && mem_rmask_reg == '0)) ? 1'b1 : 1'b0;
+    assign dmem_stall = !dmem_ready;
     cdb_entry_t cdb_entry_mem;
-    logic garbage_dmem;
+    // logic garbage_dmem;
     assign cdb_entry_mem_out = cdb_entry_mem;
     assign dispatch_load_idx = dispatch_load_idx_wire;
     assign load_rs_full = rs_load_full; 
     assign addr_rs_full = rs_addr_full;
     assign store_q_full = SQ_full;
+
     assign ROB_store_commit_flag = store_able_to_commit;
 
-    assign load_ready = (serve_load_req && !garbage_dmem && !dmem_stall);
-    assign store_ready = (serve_store && !garbage_dmem && !dmem_stall);
+    assign load_ready = (serve_load_req && !dmem_stall);
+    assign load_req_RS_idx = serve_load_idx;
+
+    assign store_ready = (serve_store && !dmem_stall);
     assign store_queue_idx = SQ_idx;
 
     assign rs2_mem = rs2_mem_wire;
@@ -151,18 +181,18 @@ import params::*;
 
     assign store_q_wrt_ptr = SQ_idx_0;
 
-    assign flush_fu_by_branch = (flush_by_branch && control_bit_map_reg[control_read_ptr[CONTROL_Q_PTR_WIDTH-1 : 0]] == 1'b1)? 1'b1: 1'b0;
+    // assign flush_fu_by_branch = (flush_by_branch && control_bit_map_reg[control_read_ptr[CONTROL_Q_PTR_WIDTH-1 : 0]] == 1'b1)? 1'b1: 1'b0;
 
     assign SQ_read_ack_out = SQ_read_ack;
     assign SQ_read_ptr_out = SQ_read_ptr;
 
-    // garbage dmem resp
-    always_ff @ (posedge clk) begin
-        if (rst) garbage_dmem <= 1'b0;
-        // else if (flush_by_branch & (dmem_stall||(read_en && !(mem_rmask == '0 && mem_wmask == '0)))) garbage_dmem <= 1'b1;
-        else if (flush_fu_by_branch & (dmem_stall||((store_ready || load_ready) && !(mem_rmask == '0 && mem_wmask == '0)))) garbage_dmem <= 1'b1;
-        else if (dmem_resp) garbage_dmem <= 1'b0;
-    end
+    // // garbage dmem resp
+    // always_ff @ (posedge clk) begin
+    //     if (rst) garbage_dmem <= 1'b0;
+    //     // else if (flush_by_branch & (dmem_stall||(read_en && !(mem_rmask == '0 && mem_wmask == '0)))) garbage_dmem <= 1'b1;
+    //     else if (flush_fu_by_branch & (dmem_stall||((store_ready || load_ready) && !(mem_rmask == '0 && mem_wmask == '0)))) garbage_dmem <= 1'b1;
+    //     else if (dmem_resp) garbage_dmem <= 1'b0;
+    // end
     
     // dmem_signals
     always_comb begin
@@ -199,18 +229,18 @@ import params::*;
 
     // post response calculation on loads for CDB. 
     always_ff @ (posedge clk) begin
-        if (rst | flush_fu_by_branch) begin
+        if (rst) begin
             dmem_rdata_reg <= '0;
             // actual_dmem_rdata_reg <= '0;
         end else begin
-            if (dmem_resp && !garbage_dmem) begin
-                if (mem_rmask_reg != '0) begin // load
+            if (dmem_resp && !load_finished_garbage_dmem) begin
+                if (!dmem_resp_type) begin // load
                     // actual_dmem_rdata_reg <= dmem_rdata; 
-                    unique case(load_f3_reg)
-                        load_f3_lb: dmem_rdata_reg <= {{24{dmem_rdata[7 +8 *addr_bottom_bits[1:0]]}}, dmem_rdata[8 *addr_bottom_bits[1:0] +: 8 ]};
-                        load_f3_lbu: dmem_rdata_reg <= {{24{1'b0}}, dmem_rdata[8 *addr_bottom_bits[1:0] +: 8 ]};
-                        load_f3_lh: dmem_rdata_reg <= {{16{dmem_rdata[15+16*addr_bottom_bits[1]  ]}}, dmem_rdata[16*addr_bottom_bits[1]   +: 16]};
-                        load_f3_lhu: dmem_rdata_reg <= {{16{1'b0}}, dmem_rdata[16*addr_bottom_bits[1]   +: 16]};
+                    unique case(load_finished_load_type)
+                        load_f3_lb: dmem_rdata_reg <= {{24{dmem_rdata[7 +8 *load_finished_addr_bottom_bits[1:0]]}}, dmem_rdata[8 *load_finished_addr_bottom_bits[1:0] +: 8 ]};
+                        load_f3_lbu: dmem_rdata_reg <= {{24{1'b0}}, dmem_rdata[8 *load_finished_addr_bottom_bits[1:0] +: 8 ]};
+                        load_f3_lh: dmem_rdata_reg <= {{16{dmem_rdata[15+16*load_finished_addr_bottom_bits[1]  ]}}, dmem_rdata[16*load_finished_addr_bottom_bits[1]   +: 16]};
+                        load_f3_lhu: dmem_rdata_reg <= {{16{1'b0}}, dmem_rdata[16*load_finished_addr_bottom_bits[1]   +: 16]};
                         load_f3_lw: dmem_rdata_reg <= dmem_rdata;
                         default: dmem_rdata_reg <= 'x;
                     endcase
@@ -223,7 +253,7 @@ import params::*;
     end
 
     always_ff @ (posedge clk) begin
-        if (rst | flush_fu_by_branch) begin
+        if (rst) begin
             dmem_resp_reg <= '0;
         end else begin
             if (dmem_resp) begin
@@ -235,16 +265,12 @@ import params::*;
     end
 
     // ------------ RVFI ----------------------------------------
+    logic req_finished; 
+    assign rvfi_inst_finished_mem = req_finished;
+
+    assign req_finished = (dmem_resp && !load_finished_garbage_dmem && !dmem_resp_type);
+
     always_ff @ (posedge clk) begin // on read enable, latch basically everything other than mem_rdata, rd_wdata
-        // if (store_ready) begin
-        //     rvfi_wmask_reg <= store_serving_wmask;
-        //     rvfi_rmask_reg <= '0;
-        //     rs1_rdata_reg <= store_serving_rs1_v;
-        //     rs2_rdata_reg <= store_serving_rs2_v;
-        //     rob_ptr_reg   <= store_serving_rob_idx; // store rob ptr before pop
-        //     mem_addr_reg  <= store_serving_addr;
-        //     mem_wdata_reg <= store_serving_wdata;
-        // end else 
         if (load_ready) begin // actual load request
             rvfi_wmask_reg <= '0;
             rvfi_rmask_reg <= req_rmask;
@@ -253,24 +279,18 @@ import params::*;
             rob_ptr_reg   <= req_rob_idx; // store rob ptr before pop
             mem_addr_reg  <= req_addr;
             mem_wdata_reg <= '0;
-            load_f3_reg <= req_load_type;
         end
     end
 
-    logic req_finished; 
-    assign rvfi_inst_finished_mem = req_finished;
-
-    assign req_finished = (dmem_resp && !garbage_dmem && mem_rmask_reg != '0);
-
     logic [31:0] rvfi_rd_wdata_tmp; // processed load data we send to RVFI rd_wdata. 
     always_comb begin
-        if (dmem_resp && !garbage_dmem) begin
-            if (mem_rmask_reg != '0) begin
-                unique case(load_f3_reg)
-                    load_f3_lb: rvfi_rd_wdata_tmp = {{24{dmem_rdata[7 +8 *addr_bottom_bits[1:0]]}}, dmem_rdata[8 *addr_bottom_bits[1:0] +: 8 ]};
-                    load_f3_lbu: rvfi_rd_wdata_tmp = {{24{1'b0}}, dmem_rdata[8 *addr_bottom_bits[1:0] +: 8 ]};
-                    load_f3_lh: rvfi_rd_wdata_tmp = {{16{dmem_rdata[15+16*addr_bottom_bits[1]  ]}}, dmem_rdata[16*addr_bottom_bits[1]   +: 16]};
-                    load_f3_lhu: rvfi_rd_wdata_tmp = {{16{1'b0}}, dmem_rdata[16*addr_bottom_bits[1]   +: 16]};
+        if (dmem_resp && !load_finished_garbage_dmem) begin
+            if (!dmem_resp_type) begin
+                unique case(load_finished_load_type)
+                    load_f3_lb: rvfi_rd_wdata_tmp = {{24{dmem_rdata[7 +8 *load_finished_addr_bottom_bits[1:0]]}}, dmem_rdata[8 *load_finished_addr_bottom_bits[1:0] +: 8 ]};
+                    load_f3_lbu: rvfi_rd_wdata_tmp = {{24{1'b0}}, dmem_rdata[8 *load_finished_addr_bottom_bits[1:0] +: 8 ]};
+                    load_f3_lh: rvfi_rd_wdata_tmp = {{16{dmem_rdata[15+16*load_finished_addr_bottom_bits[1]  ]}}, dmem_rdata[16*load_finished_addr_bottom_bits[1]   +: 16]};
+                    load_f3_lhu: rvfi_rd_wdata_tmp = {{16{1'b0}}, dmem_rdata[16*load_finished_addr_bottom_bits[1]   +: 16]};
                     load_f3_lw: rvfi_rd_wdata_tmp = dmem_rdata;
                     default: rvfi_rd_wdata_tmp = 'x;
                 endcase
@@ -284,16 +304,16 @@ import params::*;
 
     // passing RVFI signals. 
     always_comb begin
-        if ((dmem_resp && !garbage_dmem) && mem_rmask_reg != '0) begin // same cycle as response, provide data to RVFI. 
-            rvfi_rs1_rdata_mem = rs1_rdata_reg;
-            rvfi_rs2_rdata_mem = rs2_rdata_reg;
+        if ((dmem_resp && !load_finished_garbage_dmem && !dmem_resp_type)) begin // same cycle as response, provide data to RVFI. 
+            rvfi_rs1_rdata_mem = load_finished_rs1_v;
+            rvfi_rs2_rdata_mem = '0;
             rvfi_rd_wdata_mem = rvfi_rd_wdata_tmp;
-            rvfi_issue_execute_rob_ptr_mem = rob_ptr_reg;
-            rvfi_mem_wmask = rvfi_wmask_reg;
-            rvfi_mem_rmask = rvfi_rmask_reg;
-            rvfi_mem_addr = mem_addr_reg;
+            rvfi_issue_execute_rob_ptr_mem = load_finished_rob_idx;
+            rvfi_mem_wmask = '0;
+            rvfi_mem_rmask = load_finished_rmask;
+            rvfi_mem_addr = load_finished_addr;
             rvfi_mem_rdata = dmem_rdata;
-            rvfi_mem_wdata = mem_wdata_reg;
+            rvfi_mem_wdata = '0;
         end 
         else begin
             rvfi_rs1_rdata_mem = '0;
@@ -332,55 +352,39 @@ import params::*;
             rvfi_store_mem_wdata = store_serving_wdata;
         end 
     end
-
-
-
     // ---------------RVFI ----------------------------------------------------
 
     // -------------------------------CDB-------------------------------------
-    logic [ROB_PTR_WIDTH:0]                 CDB_load_req_rob_idx1;
-    logic [4:0]                             CDB_load_req_arch_d_reg1;
-    logic [PHYSICAL_REG_FILE_LENGTH-1:0]    CDB_load_req_phys_d_reg1;
-    logic [CONTROL_Q_DEPTH-1:0]             CDB_load_control_bit_map_reg1;
+    logic [ROB_PTR_WIDTH:0] CDB_rob_idx_reg;
+    logic [4:0] CDB_arch_d_reg_reg;
+    logic [PHYSICAL_REG_FILE_LENGTH-1:0] CDB_phys_d_reg_reg;
+    logic load_req_finished;
 
-    logic [ROB_PTR_WIDTH:0]                 CDB_load_req_rob_idx2;
-    logic [4:0]                             CDB_load_req_arch_d_reg2;
-    logic [PHYSICAL_REG_FILE_LENGTH-1:0]    CDB_load_req_phys_d_reg2;
-    logic [CONTROL_Q_DEPTH-1:0]             CDB_load_control_bit_map_reg2;
-
-    logic [ROB_PTR_WIDTH:0]                 CDB_store_req_rob_idx;
-    logic [CONTROL_Q_DEPTH-1:0]             CDB_store_control_bit_map_reg;
     always_ff @ (posedge clk) begin
-        if (rst |flush_fu_by_branch) begin
-            mem_wmask_reg <= '0;
-            mem_rmask_reg <= '0;
-            control_bit_map_reg <= '0;
-        end 
-        else if (store_ready) begin
-            mem_wmask_reg <= store_serving_wmask;
-            mem_rmask_reg <= '0;
-            control_bit_map_reg <= store_serving_control_bit_map;
-        end else if (load_ready) begin
-            mem_rmask_reg <= req_rmask;
-            mem_wmask_reg <= '0;
-            control_bit_map_reg <= req_control_bit_map;
-        end else if (dmem_resp && !store_ready && !load_ready) begin
-            mem_rmask_reg <= '0;
-            mem_wmask_reg <= '0;
-            control_bit_map_reg <= '0;
+        if (rst) begin
+            load_req_finished <= '0;
+        end else if (dmem_resp && !dmem_resp_type && !load_finished_garbage_dmem) begin
+            load_req_finished <= '1;
+        end else begin
+            load_req_finished <= '0;
         end
-        if (branch_resolved) control_bit_map_reg[control_read_ptr[CONTROL_Q_PTR_WIDTH-1 : 0]] <= 1'b0;
     end
 
-    logic load_req_finished, store_req_finished;
     always_ff @ (posedge clk) begin
-        if (rst | flush_fu_by_branch) begin
-            load_req_finished <= '0;
-        end else if (dmem_resp && !garbage_dmem && mem_rmask_reg != '0) begin
-            load_req_finished <= '1;
-        end 
-        else begin
-            load_req_finished <= '0;
+        if (rst) begin
+            CDB_rob_idx_reg <= '0;
+            CDB_arch_d_reg_reg <= '0;
+            CDB_phys_d_reg_reg <= '0;
+            CDB_control_bit_map_reg <= '0;
+        end
+        // else if (dmem_resp && !garbage_dmem) begin
+        else if (dmem_resp && !load_finished_garbage_dmem) begin
+            if (!dmem_resp_type) begin
+                CDB_rob_idx_reg <= load_finished_rob_idx;
+                CDB_arch_d_reg_reg <= load_finished_arch_d_reg;
+                CDB_phys_d_reg_reg <= load_finished_phys_d_reg;
+                CDB_control_bit_map_reg <= load_finished_control_bit_map;
+            end
         end
     end
 
@@ -389,48 +393,12 @@ import params::*;
         cdb_entry_mem = '0;
         if (dmem_resp_reg && load_req_finished) begin
             cdb_entry_mem.valid = '1;
-            cdb_entry_mem.rob_idx = CDB_load_req_rob_idx2;
-            cdb_entry_mem.arch_d_reg = CDB_load_req_arch_d_reg2;
-            cdb_entry_mem.phys_d_reg = CDB_load_req_phys_d_reg2;
+            cdb_entry_mem.rob_idx = CDB_rob_idx_reg;
+            cdb_entry_mem.arch_d_reg = CDB_arch_d_reg_reg;
+            cdb_entry_mem.phys_d_reg = CDB_phys_d_reg_reg;
             cdb_entry_mem.rd_v = dmem_rdata_reg;
-            cdb_entry_mem.control_bit_map = CDB_load_control_bit_map_reg2;
-        end
-    end
-
-    always_ff @ (posedge clk) begin
-        if (rst | flush_fu_by_branch) begin
-            addr_bottom_bits <= '0;
+            cdb_entry_mem.control_bit_map = CDB_control_bit_map_reg;
         end 
-        else if (load_ready) begin
-            addr_bottom_bits <= req_addr[1:0];
-        end 
-    end
-
-    always_ff @ (posedge clk) begin
-        if (rst |flush_fu_by_branch) begin
-            CDB_load_req_rob_idx1 <= '0;
-            CDB_load_req_arch_d_reg1 <= '0;
-            CDB_load_req_phys_d_reg1 <= '0;
-        end else if (load_ready) begin
-            CDB_load_req_rob_idx1 <= req_rob_idx;
-            CDB_load_req_arch_d_reg1 <= req_arch_d_reg;
-            CDB_load_req_phys_d_reg1 <= req_phys_d_reg;
-            CDB_load_control_bit_map_reg1 <= req_control_bit_map;
-        end
-    end
-
-    always_ff @ (posedge clk) begin
-        if (rst |flush_fu_by_branch) begin
-            CDB_load_req_rob_idx2 <= '0;
-            CDB_load_req_arch_d_reg2 <= '0;
-            CDB_load_req_phys_d_reg2 <= '0;
-            CDB_load_control_bit_map_reg2 <= '0;
-        end else begin
-            CDB_load_req_rob_idx2 <= CDB_load_req_rob_idx1;
-            CDB_load_req_arch_d_reg2 <= CDB_load_req_arch_d_reg1;
-            CDB_load_req_phys_d_reg2 <= CDB_load_req_phys_d_reg1;
-            CDB_load_control_bit_map_reg2 <= CDB_load_control_bit_map_reg1;
-        end
     end
 
     // --------------------------------CDB-----------------------------------
@@ -482,6 +450,9 @@ import params::*;
         .SQ_read_ack(SQ_read_ack), 
         .SQ_read_ptr(SQ_read_ptr),
         .dmem_stall(dmem_stall),
+        .dcache_load_idx(dcache_load_idx),
+        .dmem_resp(dmem_resp),
+        .dmem_resp_type(dmem_resp_type),
 
         .rs_load_full(rs_load_full), // output to dispatch to not make it dispatch a load inst.
         .dispatch_load_idx(dispatch_load_idx_wire), // next available entry, used by ADDR RS to remember where to update the LOAD RS with calculated address. 
@@ -492,7 +463,6 @@ import params::*;
         .rmask_in(rmask),
         .rs1_v(rs1_v),
         .load_type(load_type),
-        .garbage_dmem(garbage_dmem),
 
         .req_addr(req_addr),
         .req_rmask(req_rmask),
@@ -503,6 +473,18 @@ import params::*;
         .req_rs1_v(req_rs1_v),
         .req_control_bit_map(req_control_bit_map),
         .serve_load_req(serve_load_req),
+        .serve_load_idx(serve_load_idx),
+
+        .load_finished_rob_idx(load_finished_rob_idx),
+        .load_finished_arch_d_reg(load_finished_arch_d_reg),
+        .load_finished_phys_d_reg(load_finished_phys_d_reg),
+        .load_finished_control_bit_map(load_finished_control_bit_map),
+        .load_finished_addr_bottom_bits(load_finished_addr_bottom_bits),
+        .load_finished_garbage_dmem(load_finished_garbage_dmem),
+        .load_finished_load_type(load_finished_load_type),
+        .load_finished_addr(load_finished_addr),
+        .load_finished_rs1_v(load_finished_rs1_v),
+        .load_finished_rmask(load_finished_rmask),
 
         .store_queue(store_queue_out)
     );
@@ -517,6 +499,7 @@ import params::*;
 
         .store_write(store_write),
         .store_queue_entry(store_queue_entry),
+        .dcache_store_idx(dcache_store_idx),
 
         .cdb_entry_mult(cdb_entry_mult), 
         .cdb_entry_branch(cdb_entry_branch),
@@ -538,7 +521,6 @@ import params::*;
         .wmask_in(wmask), 
         .rs1_v(rs1_v),
         .store_type(store_type),
-        .garbage_dmem(garbage_dmem),
 
         .lsq_write_ptr_on_flush(lsq_write_ptr_on_flush),
         .store_q_bitmap_on_flush(store_q_bitmap_on_flush),
@@ -558,7 +540,10 @@ import params::*;
         .older_store_map(older_store_map_wire),
         .store_queue_out(store_queue_out),
         .SQ_idx_0(SQ_idx_0),
-        .SQ_idx(SQ_idx)
+        .SQ_idx(SQ_idx),
+        .store_req_idx(store_req_entry_idx),
+        .store_finished_rob_idx(store_finished_rob_idx),
+        .store_finished_control_bit_map(store_finished_control_bit_map)
     );
 
 

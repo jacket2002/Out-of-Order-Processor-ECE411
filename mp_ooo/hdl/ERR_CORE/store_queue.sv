@@ -29,7 +29,12 @@ import params::*;
     input logic [3:0] wmask_in, 
     input logic [31:0] rs1_v,
     input store_f3_t store_type,
-    input logic garbage_dmem,
+
+    // non-block cache
+    input logic [STORE_QUEUE_PTR_WIDTH-1:0] dcache_store_idx,
+
+    output logic [ROB_PTR_WIDTH:0] store_finished_rob_idx,
+    output logic [CONTROL_Q_DEPTH-1:0] store_finished_control_bit_map,
 
     // EBR
     input  logic [CONTROL_Q_PTR_WIDTH : 0]   control_read_ptr,
@@ -51,6 +56,7 @@ import params::*;
     output store_queue_entry_t store_queue_out [STORE_QUEUE_DEPTH],
     output logic [STORE_QUEUE_PTR_WIDTH :0] SQ_idx_0,
     output logic [STORE_QUEUE_PTR_WIDTH-1:0] SQ_idx,
+    output logic [STORE_QUEUE_PTR_WIDTH-1:0] store_req_idx,
 
     output logic store_able_to_commit
 );
@@ -63,20 +69,23 @@ import params::*;
     logic flush_entire_lsq;
 
     assign SQ_read_ptr = store_queue_read_ptr;
+    assign store_req_idx = store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0];
     assign store_queue_out = store_queue;
     assign rs2_mem = store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].phys_r2;
     assign SQ_full = ((store_queue_write_ptr[STORE_QUEUE_PTR_WIDTH-1:0] == store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0])&&
     (store_queue_write_ptr[STORE_QUEUE_PTR_WIDTH] != store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH])) ? '1 : '0; // makes sure read_ptr is more thanone away
 
+    assign store_able_to_commit = SQ_read_en && !SQ_empty;
+
     assign SQ_empty = (store_queue_read_ptr == store_queue_write_ptr) ? '1 : '0;
     
-    assign SQ_read_en = (store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].phys_r2_valid && store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].rob_idx[ROB_PTR_WIDTH-1:0] == ROB_read_ptr[ROB_PTR_WIDTH-1:0] && 
-    store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].valid_addr && !dmem_stall && !garbage_dmem && !flush_by_branch);
+    assign SQ_read_en = (store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].phys_r2_valid && (store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].rob_idx[ROB_PTR_WIDTH-1:0] == ROB_read_ptr[ROB_PTR_WIDTH-1:0]) && 
+    store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].valid_addr && !dmem_stall && !flush_by_branch);
 
     assign SQ_idx = store_queue_write_ptr[STORE_QUEUE_PTR_WIDTH-1:0];
     assign SQ_idx_0 = store_queue_write_ptr;
     assign flush_entire_lsq = (store_queue[store_queue_read_ptr[STORE_QUEUE_PTR_WIDTH-1:0]].control_bit_map[control_read_ptr[CONTROL_Q_PTR_WIDTH-1 : 0]] == 1'b1)? 1'b1: 1'b0;
-    assign store_able_to_commit = SQ_read_en && !SQ_empty;
+
     // bit map
     always_ff @ (posedge clk) begin
         if (rst) begin
@@ -198,6 +207,10 @@ import params::*;
         end
     end
 
+    always_comb begin
+        store_finished_rob_idx = store_queue[dcache_store_idx].rob_idx;
+        store_finished_control_bit_map = store_queue[dcache_store_idx].control_bit_map;
+    end
 
 
 endmodule : store_queue

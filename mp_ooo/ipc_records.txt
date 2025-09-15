@@ -1,0 +1,13 @@
+cp3 baseline processor:
+coremark_im: 0.3701
+aes_sha: 0.5608
+compression: 0.4651
+fft: 0.4752
+mergesort: 0.5225
+
+split LSQ with forwarding:
+coremark_im: 0.3655
+aes_sha: 0.5563
+compression: 
+fft: 0.468
+mergesort: 0.5205
